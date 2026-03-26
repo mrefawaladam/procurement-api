@@ -1,0 +1,299 @@
+REQUIREMENT ANALYSIS (20%)
+1. Identifikasi Sistem
+Actors (Pengguna Sistem):
+
+Karyawan (Pemohon): Mengajukan permintaan barang/jasa dan memantau status.
+
+Purchasing Staff: Melakukan verifikasi awal pada permintaan dan melakukan pengadaan ke vendor jika diperlukan.
+
+Atasan Purchasing: Memberikan approval (persetujuan) atau rejection (penolakan) terhadap permintaan.
+
+Warehouse Staff: Mengecek dan mengonfirmasi ketersediaan stok fisik di gudang.
+
+System: Mengirimkan notifikasi status secara otomatis.
+
+Core Entities: User, Department, Request (Header Pengajuan), Request_Item (Detail Barang), Stock (Katalog Gudang), Vendor, Procurement_Order (PO Vendor), Approval, Status_History.
+
+Workflow States: DRAFT, SUBMITTED, VERIFIED, APPROVED, REJECTED, CHECKING_STOCK, IN_PROCUREMENT, COMPLETED.
+
+Critical Business Rules:
+
+Pengadaan ke vendor (IN_PROCUREMENT) hanya bisa dilakukan jika status sudah APPROVED dan stok gudang kosong/kurang.
+
+Karyawan tidak dapat mengubah request setelah statusnya melewati SUBMITTED.
+
+Setiap perubahan status harus terekam (immutable audit trail).
+
+2. Klarifikasi dan Asumsi
+Pertanyaan Klarifikasi (untuk System Analyst):
+
+Bagaimana penanganan Partial Fulfillment? Jika minta 5 laptop tapi gudang hanya ada 3, apakah request di-split atau menunggu sisa 2 dibeli dari vendor?
+
+Apakah ada batas maksimal nominal pengajuan untuk Atasan Purchasing (misal: > Rp 50 Juta butuh approval Direktur)?
+
+Jika ditolak (REJECTED), apakah pemohon harus membuat request baru dari nol atau bisa merevisi yang sudah ada?
+
+Asumsi Sistem:
+
+Modul autentikasi dan manajemen user (Role, Department) diasumsikan sudah ada (menggunakan token-based/Sanctum).
+
+Tidak ada modul invoicing (pembayaran vendor) dalam scope ini, sistem berhenti di pembuatan Procurement Order (PO) dan penerimaan barang.
+
+Notifikasi berjalan secara asynchronous (misal via Laravel Queues).
+
+SYSTEM DESIGN (30%)
+1. Entity Relationship Diagram (ERD)
+(Diagram dapat di-generate menggunakan Mermaid)
+
+Code snippet
+erDiagram
+    DEPARTMENTS ||--o{ USERS : "memiliki"
+    DEPARTMENTS ||--o{ REQUESTS : "menaungi"
+    USERS ||--o{ REQUESTS : "membuat"
+    USERS ||--o{ APPROVALS : "menyetujui"
+    USERS ||--o{ STATUS_HISTORY : "mengubah_status"
+    VENDORS ||--o{ PROCUREMENT_ORDERS : "menerima"
+    STOCK ||--o{ REQUEST_ITEMS : "menyediakan"
+    REQUESTS ||--|{ REQUEST_ITEMS : "berisi"
+    REQUESTS ||--o{ APPROVALS : "memiliki_riwayat"
+    REQUESTS ||--o| PROCUREMENT_ORDERS : "menghasilkan"
+    REQUESTS ||--o{ STATUS_HISTORY : "dilacak_oleh"
+2. Struktur Tabel PostgreSQL 14 (DDL)
+SQL
+CREATE TABLE departments (
+    id BIGSERIAL PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP NULL
+);
+
+CREATE TABLE users (
+    id BIGSERIAL PRIMARY KEY,
+    department_id BIGINT NOT NULL,
+    name VARCHAR(255) NOT NULL,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    role VARCHAR(50) NOT NULL, 
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP NULL,
+    FOREIGN KEY (department_id) REFERENCES departments(id) ON DELETE RESTRICT
+);
+
+CREATE TABLE vendors (
+    id BIGSERIAL PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    contact_info VARCHAR(255),
+    address TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP NULL
+);
+
+CREATE TABLE stock (
+    id BIGSERIAL PRIMARY KEY,
+    sku VARCHAR(50) UNIQUE NOT NULL,
+    name VARCHAR(255) NOT NULL,
+    category VARCHAR(100) NOT NULL,
+    quantity INT NOT NULL DEFAULT 0,
+    unit_price DECIMAL(15, 2) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP NULL
+);
+
+CREATE TABLE requests (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    department_id BIGINT NOT NULL,
+    status VARCHAR(50) NOT NULL DEFAULT 'DRAFT', 
+    total_amount DECIMAL(15, 2) DEFAULT 0,
+    notes TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE RESTRICT,
+    FOREIGN KEY (department_id) REFERENCES departments(id) ON DELETE RESTRICT
+);
+
+CREATE TABLE request_items (
+    id BIGSERIAL PRIMARY KEY,
+    request_id BIGINT NOT NULL,
+    stock_id BIGINT NOT NULL,
+    qty_requested INT NOT NULL,
+    snapshot_price DECIMAL(15, 2) NOT NULL, 
+    subtotal DECIMAL(15, 2) NOT NULL,
+    FOREIGN KEY (request_id) REFERENCES requests(id) ON DELETE CASCADE,
+    FOREIGN KEY (stock_id) REFERENCES stock(id) ON DELETE RESTRICT
+);
+
+CREATE TABLE approvals (
+    id BIGSERIAL PRIMARY KEY,
+    request_id BIGINT NOT NULL,
+    approver_id BIGINT NOT NULL,
+    action VARCHAR(50) NOT NULL, 
+    comments TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (request_id) REFERENCES requests(id) ON DELETE CASCADE,
+    FOREIGN KEY (approver_id) REFERENCES users(id) ON DELETE RESTRICT
+);
+
+CREATE TABLE procurement_orders (
+    id BIGSERIAL PRIMARY KEY,
+    request_id BIGINT UNIQUE NOT NULL, 
+    vendor_id BIGINT NOT NULL,
+    po_number VARCHAR(100) UNIQUE NOT NULL,
+    status VARCHAR(50) NOT NULL DEFAULT 'ORDERED', 
+    total_cost DECIMAL(15, 2) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    deleted_at TIMESTAMP NULL,
+    FOREIGN KEY (request_id) REFERENCES requests(id) ON DELETE RESTRICT,
+    FOREIGN KEY (vendor_id) REFERENCES vendors(id) ON DELETE RESTRICT
+);
+
+CREATE TABLE status_history (
+    id BIGSERIAL PRIMARY KEY,
+    request_id BIGINT NOT NULL,
+    user_id BIGINT NOT NULL, 
+    previous_status VARCHAR(50),
+    new_status VARCHAR(50) NOT NULL,
+    changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (request_id) REFERENCES requests(id) ON DELETE CASCADE,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE RESTRICT
+);
+
+-- STRATEGI INDEXING
+CREATE INDEX idx_requests_status ON requests(status);
+CREATE INDEX idx_requests_created_at ON requests(created_at);
+CREATE INDEX idx_stock_category ON stock(category);
+CREATE INDEX idx_users_department ON users(department_id);
+3. Penjelasan Desain Database
+Alasan Desain & Konsistensi Data: Menggunakan Normalisasi 3NF dengan pemisahan tabel Header (requests) dan Detail (request_items). Konsistensi dijaga ketat dengan Foreign Key constraints (ON DELETE RESTRICT untuk entitas master, CASCADE untuk data anak yang relevan).
+
+Pencegahan Redundansi: Menggunakan relasi ID, kecuali untuk snapshot_price di request_items. Ini adalah denormalisasi yang disengaja untuk mengunci harga saat request dibuat, agar tidak berubah jika harga di master stock naik di kemudian hari.
+
+Soft Delete vs Hard Delete: Semua tabel master dan transaksional menggunakan Soft Delete (deleted_at). Dalam sistem finansial/pengadaan, data historis tidak boleh dihapus fisik (Hard Delete) demi keperluan audit.
+
+WORKFLOW & BUSINESS LOGIC (20%)
+1. State Transition Diagram
+Code snippet
+stateDiagram-v2
+    direction TB
+    [*] --> DRAFT : Karyawan buat pengajuan
+    DRAFT --> SUBMITTED : Karyawan Submit
+    SUBMITTED --> VERIFIED : Purchasing Verifikasi
+    SUBMITTED --> REJECTED : Purchasing Tolak
+    VERIFIED --> APPROVED : Atasan Approve
+    VERIFIED --> REJECTED : Atasan Tolak
+    APPROVED --> CHECKING_STOCK : Warehouse Cek Stok
+    CHECKING_STOCK --> COMPLETED : Stok Tersedia (Ambil)
+    CHECKING_STOCK --> IN_PROCUREMENT : Stok Kosong (PO)
+    IN_PROCUREMENT --> COMPLETED : Barang Tiba
+    REJECTED --> [*]
+    COMPLETED --> [*]
+2. Penanganan Konkurensi & Logika Bisnis
+Mencegah Double Approval: Menggunakan Pessimistic Locking di PostgreSQL. Saat API /approve dipanggil, gunakan metode lockForUpdate() di Laravel (SELECT ... FOR UPDATE) dan validasi state saat ini (if status !== 'VERIFIED'). Transaksi akan dibatalkan jika dieksekusi bersamaan.
+
+Menangani Parallel Modification: Menggunakan Optimistic Locking. Setiap update ke request harus menyertakan updated_at (versi) terakhir. Jika di database nilainya sudah berbeda (diubah user lain), tolak dengan kode HTTP 409 Conflict.
+
+Mencegah Stock Race Condition: Tidak menarik data stok ke PHP lalu menguranginya, melainkan menggunakan operasi atomic update langsung di database: DB::table('stock')->where('quantity', '>=', $qty)->decrement('quantity', $qty).
+
+Konflik Akses User: Di level API menggunakan Optimistic Locking. Sebagai nilai tambah di sisi UI, bisa diterapkan sistem Visual Locking (menandai dokumen "Sedang diedit oleh User A" sehingga User B hanya bisa menggunakan mode Read-Only).
+
+API DESIGN (15%)
+(Asumsi: Semua endpoint membutuhkan header Authorization: Bearer {token})
+
+1. POST /requests (Membuat pengajuan)
+
+Validasi: items array required, stock_id exists.
+
+Request Body: {"department_id": 2, "notes": "...", "items": [{"stock_id": 15, "qty_requested": 2}]}
+
+Response (201 Created): {"message": "Sukses", "data": {"request_id": 1024, "status": "DRAFT"}}
+
+2. GET /requests?status=approved (Melihat daftar)
+
+Validasi: status in (DRAFT, SUBMITTED, APPROVED, etc).
+
+Response (200 OK): Format JSON Pagination standar Laravel (data, meta: { current_page, total }).
+
+3. POST /requests/{id}/approve (Menyetujui pengajuan)
+
+Validasi: Status saat ini wajib VERIFIED. User role wajib manager.
+
+Request Body: {"comments": "Sesuai budget"} (Opsional).
+
+Response (200 OK): {"data": {"new_status": "APPROVED"}}
+
+4. POST /requests/{id}/reject (Menolak pengajuan)
+
+Validasi: Status wajib SUBMITTED atau VERIFIED.
+
+Request Body: {"comments": "Budget habis"} (Wajib diisi).
+
+Response (200 OK): {"data": {"new_status": "REJECTED"}}
+
+5. POST /requests/{id}/procure (Membuat PO Vendor)
+
+Validasi: Status wajib CHECKING_STOCK atau APPROVED. vendor_id valid.
+
+Request Body: {"vendor_id": 5, "notes": "Urgent"}
+
+Response (201 Created): {"data": {"po_number": "PO-001", "new_status": "IN_PROCUREMENT"}}
+
+REPORTING & QUERY (10%)
+(Query PostgreSQL 14)
+
+1. Top 5 department dengan permintaan terbanyak dalam 3 bulan terakhir:
+
+SQL
+SELECT d.name, COUNT(r.id) AS total_requests
+FROM requests r
+JOIN departments d ON r.department_id = d.id
+WHERE r.created_at >= CURRENT_DATE - INTERVAL '3 months'
+GROUP BY d.id, d.name
+ORDER BY total_requests DESC
+LIMIT 5;
+2. Kategori barang paling banyak diminta per bulan:
+
+SQL
+SELECT DISTINCT ON (bulan)
+    DATE_TRUNC('month', r.created_at)::DATE AS bulan,
+    s.category,
+    SUM(ri.qty_requested) AS total_qty
+FROM requests r
+JOIN request_items ri ON r.id = ri.request_id
+JOIN stock s ON ri.stock_id = s.id
+GROUP BY DATE_TRUNC('month', r.created_at), s.category
+ORDER BY bulan DESC, total_qty DESC;
+3. Average lead time dari SUBMITTED hingga COMPLETED:
+
+SQL
+WITH RequestTimestamps AS (
+    SELECT request_id,
+        MIN(CASE WHEN new_status = 'SUBMITTED' THEN changed_at END) AS submitted_time,
+        MAX(CASE WHEN new_status = 'COMPLETED' THEN changed_at END) AS completed_time
+    FROM status_history
+    GROUP BY request_id
+)
+SELECT AVG(completed_time - submitted_time) AS average_lead_time
+FROM RequestTimestamps
+WHERE submitted_time IS NOT NULL AND completed_time IS NOT NULL;
+ADVANCED ENGINEERING (5% & BONUS)
+Optimasi 5 Juta Record: * Database: Memisahkan operasi baca-tulis menggunakan arsitektur Read/Write Replica.
+
+Aplikasi: Menghindari N+1 query di Laravel dengan Eager Loading, dan menggunakan Chunking untuk mengekspor laporan agar tidak Out of Memory.
+
+Archiving: Memindahkan data COMPLETED/REJECTED yang usianya lebih dari 2 tahun ke Data Warehouse (Cold Storage).
+
+Kapan Menggunakan Partitioning: Saat ukuran tabel melebihi kapasitas RAM (index lambat dibaca). Strategi terbaik adalah Time-based Partitioning pada tabel requests (misal dipartisi per tahun).
+
+Penggunaan Caching: Sangat perlu (menggunakan Redis). Terutama untuk memori data master yang jarang berubah (department, kategori stok) dan query reporting dashboard atasan dengan TTL (misal 1 jam) agar database tidak terbebani saat refresh halaman.
+
+Pertanyaan Tambahan (Nilai Tambah)
+Immutable Audit Trail: Menggunakan pola Event Sourcing. Di level database, terapkan Role-Based Access Control (RBAC) dengan revoke hak akses UPDATE dan DELETE pada tabel status_history sehingga bahkan akun aplikasi API tidak bisa mengubah riwayat.
+
+Desain Microservice: Memecah menjadi IAM Service, Procurement Service, dan Inventory Service. Komunikasi tidak sinkron antar API, melainkan menggunakan pola Event-Driven via Message Broker (Kafka/RabbitMQ) untuk mengurangi latency dan beban jaringan.
+
+Menangani Event Asynchronous: Menggunakan Laravel Queues. API merespons klien dengan cepat (200 OK), sementara tugas lambat seperti kirim email (Job) didorong ke queue worker di background untuk dieksekusi secara terpisah.

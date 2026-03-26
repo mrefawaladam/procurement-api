@@ -1,0 +1,322 @@
+{
+    "openapi": "3.0.0",
+    "info": {
+        "title": "Internal Procurement API",
+        "description": "API documentation for the Internal Procurement System Technical Test.",
+        "version": "1.0.0"
+    },
+    "servers": [
+        {
+            "url": "http://localhost:8000",
+            "description": "Local API Server"
+        }
+    ],
+    "paths": {
+        "/api/reports/monthly-categories": {
+            "get": {
+                "tags": [
+                    "Reports"
+                ],
+                "summary": "Top procurement categories by volume per month",
+                "operationId": "1bf660e15d49318520a076182e4d0f31",
+                "responses": {
+                    "200": {
+                        "description": "Successful report generation"
+                    }
+                }
+            }
+        },
+        "/api/reports/lead-time": {
+            "get": {
+                "tags": [
+                    "Reports"
+                ],
+                "summary": "Average lead time from SUBMITTED to COMPLETED",
+                "operationId": "032a86de6aa6afe08721a74e647e9fc3",
+                "responses": {
+                    "200": {
+                        "description": "Successful metric calculation"
+                    }
+                }
+            }
+        },
+        "/api/requests/export": {
+            "get": {
+                "tags": [
+                    "Requests"
+                ],
+                "summary": "Export requests to CSV (Supports 5M+ records using Chunking)",
+                "operationId": "0fc15f68fe92d38fcd4442544df06dfe",
+                "responses": {
+                    "200": {
+                        "description": "CSV file stream"
+                    }
+                },
+                "security": [
+                    {
+                        "sanctum": []
+                    }
+                ]
+            }
+        },
+        "/api/requests": {
+            "get": {
+                "tags": [
+                    "Requests"
+                ],
+                "summary": "List all procurement requests",
+                "operationId": "d9786ff19c5d7c51597cf7850f972d8b",
+                "parameters": [
+                    {
+                        "name": "status",
+                        "in": "query",
+                        "required": false,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Paginated list of requests"
+                    }
+                },
+                "security": [
+                    {
+                        "sanctum": []
+                    }
+                ]
+            },
+            "post": {
+                "tags": [
+                    "Requests"
+                ],
+                "summary": "Create a new procurement request",
+                "operationId": "b52928f74fc4be3b6808819bb42db29c",
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "properties": {
+                                    "department_id": {
+                                        "type": "integer",
+                                        "example": 1
+                                    },
+                                    "notes": {
+                                        "type": "string",
+                                        "example": "Need new equipment"
+                                    },
+                                    "items": {
+                                        "type": "array",
+                                        "items": {
+                                            "properties": {
+                                                "stock_id": {
+                                                    "type": "integer",
+                                                    "example": 1
+                                                },
+                                                "qty_requested": {
+                                                    "type": "integer",
+                                                    "example": 2
+                                                }
+                                            },
+                                            "type": "object"
+                                        }
+                                    }
+                                },
+                                "type": "object"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "201": {
+                        "description": "Success"
+                    },
+                    "422": {
+                        "description": "Validation Error"
+                    }
+                },
+                "security": [
+                    {
+                        "sanctum": []
+                    }
+                ]
+            }
+        },
+        "/api/requests/{id}/approve": {
+            "post": {
+                "tags": [
+                    "Workflows"
+                ],
+                "summary": "Approve a procurement request (Manager Only)",
+                "operationId": "965a1e9192326f43072fe18533a50e0b",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "integer"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "properties": {
+                                    "comments": {
+                                        "type": "string",
+                                        "example": "Approved for budget"
+                                    },
+                                    "last_updated_at": {
+                                        "type": "string",
+                                        "example": "2024-03-27 05:00:00"
+                                    }
+                                },
+                                "type": "object"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Approved"
+                    },
+                    "409": {
+                        "description": "Conflict"
+                    },
+                    "422": {
+                        "description": "Constraint Violation"
+                    }
+                },
+                "security": [
+                    {
+                        "sanctum": []
+                    }
+                ]
+            }
+        },
+        "/api/requests/{id}/reject": {
+            "post": {
+                "tags": [
+                    "Workflows"
+                ],
+                "summary": "Reject a procurement request",
+                "operationId": "5d5c3d7a06f7f342fb9a8776861bdc42",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "integer"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "properties": {
+                                    "comments": {
+                                        "type": "string",
+                                        "example": "Budget too high"
+                                    },
+                                    "last_updated_at": {
+                                        "type": "string",
+                                        "example": "2024-03-27 05:00:00"
+                                    }
+                                },
+                                "type": "object"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Rejected"
+                    },
+                    "409": {
+                        "description": "Conflict"
+                    }
+                },
+                "security": [
+                    {
+                        "sanctum": []
+                    }
+                ]
+            }
+        },
+        "/api/requests/{id}/procure": {
+            "post": {
+                "tags": [
+                    "Workflows"
+                ],
+                "summary": "Generate Procurement Order (PO) to vendors",
+                "operationId": "4959262507a1e88a21e905ee164562a7",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "integer"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "properties": {
+                                    "vendor_id": {
+                                        "type": "integer",
+                                        "example": 1
+                                    }
+                                },
+                                "type": "object"
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "201": {
+                        "description": "PO Created"
+                    }
+                },
+                "security": [
+                    {
+                        "sanctum": []
+                    }
+                ]
+            }
+        }
+    },
+    "components": {
+        "securitySchemes": {
+            "sanctum": {
+                "type": "http",
+                "bearerFormat": "JWT",
+                "scheme": "bearer"
+            }
+        }
+    },
+    "tags": [
+        {
+            "name": "Reports",
+            "description": "Reports"
+        },
+        {
+            "name": "Requests",
+            "description": "Requests"
+        },
+        {
+            "name": "Workflows",
+            "description": "Workflows"
+        }
+    ]
+}
